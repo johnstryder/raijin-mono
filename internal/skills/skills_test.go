@@ -76,6 +76,9 @@ func mergedSkillsForTest() map[string]Skill {
 	all := artifacts.Merge(
 		func(s Skill) string { return s.Name },
 		loadSkillsFromPath("embedded://skills", artifacts.SourceEmbedded),
+		loadSkillsFromPath(paths.CursorSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromPath(paths.CursorUserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromPath(paths.LegacyUserSkillsDir(), artifacts.SourceUser),
 		loadSkillsFromPath(paths.UserSkillsDir(), artifacts.SourceUser),
 		loadSkillsFromPath(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
 	)
@@ -129,5 +132,25 @@ func TestSkillPrecedence_UserOverEmbedded(t *testing.T) {
 	}
 	if got.Description != "user init" {
 		t.Fatalf("expected user description, got %q", got.Description)
+	}
+}
+
+func TestSkillLoad_CursorDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	withSkillCwd(t, project)
+
+	writeSkillFile(t, filepath.Join(paths.CursorSkillsDir(), "loop", paths.SkillFileName),
+		"---\ndescription: cursor loop skill\n---\nbody")
+	writeSkillFile(t, filepath.Join(paths.CursorUserSkillsDir(), "custom", paths.SkillFileName),
+		"---\ndescription: cursor user custom\n---\nbody")
+
+	merged := mergedSkillsForTest()
+	if got, ok := merged["loop"]; !ok || got.Description != "cursor loop skill" {
+		t.Fatalf("loop skill = %+v, ok=%v", got, ok)
+	}
+	if got, ok := merged["custom"]; !ok || got.Description != "cursor user custom" {
+		t.Fatalf("custom skill = %+v, ok=%v", got, ok)
 	}
 }

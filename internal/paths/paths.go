@@ -60,6 +60,24 @@ func LegacyUserSkillsDir() string {
 	return filepath.Join(home, ".agents", "skills")
 }
 
+// CursorSkillsDir returns Cursor's bundled skills ($HOME/.cursor/skills-cursor).
+func CursorSkillsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".cursor", "skills-cursor")
+}
+
+// CursorUserSkillsDir returns Cursor user-installed skills ($HOME/.cursor/skills).
+func CursorUserSkillsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".cursor", "skills")
+}
+
 // UserPromptsDir returns the path to the user prompts directory.
 func UserPromptsDir() string {
 	return RaijinPath("agents", "prompts")

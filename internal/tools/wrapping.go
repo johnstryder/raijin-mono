@@ -357,7 +357,7 @@ func keyPriority(key string) int {
 	switch key {
 	case "path":
 		return 0
-	case "pattern":
+	case "pattern", "query":
 		return 1
 	case "command":
 		return 2

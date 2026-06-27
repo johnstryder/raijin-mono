@@ -7,6 +7,7 @@ package oneshot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -34,6 +36,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
+	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
 
 func effectiveContextWindow(opts Options) int64 {
@@ -59,9 +62,16 @@ const assistantCaptureEnv = "RAIJIN_ASSISTANT_CAPTURE_FILE"
 
 var ralphEphemeralRunMu sync.Mutex
 
+var lookupWebsearchTool = defaultWebsearchToolLookup
+
 func init() {
 	ralph.SetEphemeralPromptRunner(runRalphEphemeralPrompt)
 	ralph.SetPlanningQuestionAsker(runPlanningQuestionPrompt)
+}
+
+func defaultWebsearchToolLookup() libagent.Tool {
+	registry := tools.NewPathRegistry()
+	return tools.FindTool(tools.RegisterDefaultTools(registry), "websearch")
 }
 
 // Run executes a single prompt in non-interactive CLI mode.
@@ -199,6 +209,9 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 
 	case cmd.name == "plan":
 		return handlePlan(strings.TrimSpace(cmd.args))
+
+	case cmd.name == "websearch":
+		return handleWebsearch(cmd.args)
 
 	case cmd.name == "sessions":
 		return handleSessions(opts)
@@ -416,6 +429,92 @@ func handlePlan(rawArgs string) error {
 		return errors.New("one-off /plan prompts are no longer supported; use /plan and choose create or revise, or pass a spec slug/path like /plan custom.md")
 	}
 	return handlePlanRootFlow(ctx)
+}
+
+func handleWebsearch(rawArgs string) error {
+	args := strings.Fields(strings.TrimSpace(rawArgs))
+	if len(args) == 0 {
+		return errors.New("usage: /websearch <query> [--max <n>]")
+	}
+
+	maxResults := 0
+	queryParts := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-n" || arg == "--max":
+			if i+1 >= len(args) {
+				return errors.New("usage: /websearch <query> [--max <n>]")
+			}
+			value, err := strconv.Atoi(args[i+1])
+			if err != nil || value <= 0 {
+				return fmt.Errorf("invalid max results: %q", args[i+1])
+			}
+			maxResults = value
+			i++
+		case strings.HasPrefix(arg, "-n="):
+			valueStr := strings.TrimPrefix(arg, "-n=")
+			if valueStr == "" {
+				return errors.New("usage: /websearch <query> [--max <n>]")
+			}
+			value, err := strconv.Atoi(valueStr)
+			if err != nil || value <= 0 {
+				return fmt.Errorf("invalid max results: %q", valueStr)
+			}
+			maxResults = value
+		case strings.HasPrefix(arg, "--max="):
+			valueStr := strings.TrimPrefix(arg, "--max=")
+			if valueStr == "" {
+				return errors.New("usage: /websearch <query> [--max <n>]")
+			}
+			value, err := strconv.Atoi(valueStr)
+			if err != nil || value <= 0 {
+				return fmt.Errorf("invalid max results: %q", valueStr)
+			}
+			maxResults = value
+		default:
+			queryParts = append(queryParts, arg)
+		}
+	}
+
+	if len(queryParts) == 0 {
+		return errors.New("usage: /websearch <query> [--max <n>]")
+	}
+
+	query := strings.Join(queryParts, " ")
+	websearchTool := lookupWebsearchTool()
+	if websearchTool == nil {
+		return errors.New("websearch tool is not available in this build")
+	}
+
+	payload := map[string]any{"query": query}
+	if maxResults > 0 {
+		payload["max_results"] = maxResults
+	}
+
+	inputBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("construct websearch payload: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := websearchTool.Run(ctx, libagent.ToolCall{Input: string(inputBytes)})
+	if err != nil {
+		return fmt.Errorf("websearch tool failed: %w", err)
+	}
+	if resp.IsError {
+		return errors.New(strings.TrimSpace(resp.Content))
+	}
+
+	output := strings.TrimRight(resp.Content, "\n")
+	if strings.TrimSpace(output) == "" {
+		output = "(no output)"
+	}
+
+	fmt.Fprintln(os.Stdout, output)
+	return nil
 }
 
 type planRootAction string

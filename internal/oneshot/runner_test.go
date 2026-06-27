@@ -3,6 +3,7 @@ package oneshot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"iter"
 	"os"
@@ -71,6 +72,17 @@ func bindSession(t *testing.T, key string, store *persist.Store, sess persist.Se
 	}
 }
 
+type stubTool struct {
+	info libagent.ToolInfo
+	run  func(context.Context, libagent.ToolCall) (libagent.ToolResponse, error)
+}
+
+func (s stubTool) Info() libagent.ToolInfo { return s.info }
+
+func (s stubTool) Run(ctx context.Context, call libagent.ToolCall) (libagent.ToolResponse, error) {
+	return s.run(ctx, call)
+}
+
 type scriptedStreamModel struct {
 	calls   int
 	respFns []func(call int) fantasy.StreamResponse
@@ -78,6 +90,72 @@ type scriptedStreamModel struct {
 
 func newScriptedStreamModel(fns ...func(call int) fantasy.StreamResponse) *scriptedStreamModel {
 	return &scriptedStreamModel{respFns: fns}
+}
+
+func TestHandleWebsearchRunsTool(t *testing.T) {
+	t.Setenv(persist.SessionBindingKeyEnv, "")
+	origLookup := lookupWebsearchTool
+	t.Cleanup(func() { lookupWebsearchTool = origLookup })
+
+	type payload struct {
+		Query      string `json:"query"`
+		MaxResults int    `json:"max_results,omitempty"`
+	}
+
+	var captured payload
+	lookupWebsearchTool = func() libagent.Tool {
+		return stubTool{
+			info: libagent.ToolInfo{Name: "websearch"},
+			run: func(_ context.Context, call libagent.ToolCall) (libagent.ToolResponse, error) {
+				if err := json.Unmarshal([]byte(call.Input), &captured); err != nil {
+					t.Fatalf("unmarshal payload: %v", err)
+				}
+				return libagent.NewTextResponse("Web search results for \"test query\":\n1. Example\n   https://example.com\n   snippet."), nil
+			},
+		}
+	}
+
+	out := captureStdout(t, func() {
+		if err := handleWebsearch("--max=5 test query"); err != nil {
+			t.Fatalf("handleWebsearch: %v", err)
+		}
+	})
+
+	if captured.Query != "test query" {
+		t.Fatalf("query = %q, want %q", captured.Query, "test query")
+	}
+	if captured.MaxResults != 5 {
+		t.Fatalf("max_results = %d, want %d", captured.MaxResults, 5)
+	}
+	if !strings.Contains(out, "Web search results for \"test query\"") {
+		t.Fatalf("expected websearch output, got %q", out)
+	}
+}
+
+func TestHandleWebsearchUsageError(t *testing.T) {
+	err := handleWebsearch("   ")
+	if err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("expected usage error, got %v", err)
+	}
+}
+
+func TestHandleWebsearchToolError(t *testing.T) {
+	origLookup := lookupWebsearchTool
+	t.Cleanup(func() { lookupWebsearchTool = origLookup })
+
+	lookupWebsearchTool = func() libagent.Tool {
+		return stubTool{
+			info: libagent.ToolInfo{Name: "websearch"},
+			run: func(context.Context, libagent.ToolCall) (libagent.ToolResponse, error) {
+				return libagent.NewTextErrorResponse("web search rate-limited"), nil
+			},
+		}
+	}
+
+	err := handleWebsearch("supergirl movie box office")
+	if err == nil || !strings.Contains(err.Error(), "rate-limited") {
+		t.Fatalf("expected propagated error, got %v", err)
+	}
 }
 
 func (m *scriptedStreamModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
@@ -2037,6 +2115,22 @@ func TestResolvePrompt_PercentSyntaxPassesThroughAsPromptText(t *testing.T) {
 	}
 	if resolved.promptText != "%explorer study read.go" {
 		t.Fatalf("promptText = %q, want literal percent syntax preserved", resolved.promptText)
+	}
+}
+
+func TestResolvePrompt_WebsearchBuiltin(t *testing.T) {
+	resolved, err := resolvePrompt("/websearch golang release policy")
+	if err != nil {
+		t.Fatalf("resolvePrompt: %v", err)
+	}
+	if resolved.builtin == nil {
+		t.Fatal("expected builtin resolution")
+	}
+	if resolved.builtin.name != "websearch" {
+		t.Fatalf("builtin name = %q, want websearch", resolved.builtin.name)
+	}
+	if strings.TrimSpace(resolved.builtin.args) != "golang release policy" {
+		t.Fatalf("builtin args = %q", resolved.builtin.args)
 	}
 }
 

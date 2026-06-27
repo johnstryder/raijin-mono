@@ -780,6 +780,8 @@ func toolPreferenceFor(name string) string {
 		return "Always use the write tool instead of shell redirection (>, >>, cat <<EOF) when creating or overwriting files."
 	case "bash":
 		return "Always use the bash tool only when needed for commands that have no dedicated built-in tool equivalent. Never respond to the user via cat or similar shell tools — respond directly."
+	case "websearch":
+		return "Always use the websearch tool instead of curl/wget/bash when looking up current information on the web."
 	default:
 		return "Always use the " + name + " tool instead of using bash or shell scripts as equivalents for that task."
 	}

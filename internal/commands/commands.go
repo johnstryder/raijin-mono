@@ -29,6 +29,7 @@ var BuiltinCommands = []Command{
 	{Command: "/reasoning", Desc: "Select reasoning level for the default model"},
 	{Command: "/max-images", Desc: "Set max image attachments for the default model"},
 	{Command: "/edit", Desc: "Open an editor and send the saved content as a prompt"},
+	{Command: "/websearch", Desc: "Run a web search directly without model assistance"},
 }
 
 func HelpText() string {
